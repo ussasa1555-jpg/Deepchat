@@ -68,14 +68,14 @@ export function useOnlineStatus({
           onChangeRef.current(onlineUsers);
         }
       })
-      .on('presence', { event: 'join' }, ({ key, newPresences }: any) => {
+      .on('presence', { event: 'join' }, ({ key: _key, newPresences }: any) => {
         newPresences.forEach((presence: any) => {
           if (presence.uid && presence.uid !== currentUserUid) {
             console.log(`[PRESENCE] User joined: ${presence.nickname}`);
           }
         });
       })
-      .on('presence', { event: 'leave' }, ({ key, leftPresences }: any) => {
+      .on('presence', { event: 'leave' }, ({ key: _key, leftPresences }: any) => {
         leftPresences.forEach((presence: any) => {
           if (presence.uid && presence.uid !== currentUserUid) {
             console.log(`[PRESENCE] User left: ${presence.nickname}`);
