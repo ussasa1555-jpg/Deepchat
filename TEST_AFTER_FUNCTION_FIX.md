@@ -317,3 +317,4 @@ Script çalıştıktan sonra:
 **Hepsi tamam! Artık güvenlik açıkları giderildi!** 🎉🔒✨
 
 
+
