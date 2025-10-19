@@ -55,24 +55,8 @@ export default function RegisterPage() {
       });
 
       if (error) {
-        // Log failed registration attempt
-        try {
-          await fetch('/api/log-action', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              uid: email, // Use email for failed attempts (no UID yet)
-              action: 'register_failed',
-              metadata: { 
-                reason: error.message,
-                email: email,
-                nickname: nickname 
-              }
-            })
-          });
-        } catch (logError) {
-          console.error('Failed to log failed registration:', logError);
-        }
+        // Note: Audit logging disabled during registration (user not authenticated yet)
+        // Can be enabled post-registration in user dashboard
         
         setError(`Registration failed: ${error.message}`);
         return;
@@ -91,31 +75,14 @@ export default function RegisterPage() {
           console.log('User profile creation handled by trigger or already exists');
         }
         
-        // Log successful registration
-        try {
-          await fetch('/api/log-action', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              uid: data.user.id,
-              action: 'register',
-              metadata: { 
-                email: email,
-                nickname: nickname,
-                success: true 
-              }
-            })
-          });
-        } catch (logError) {
-          console.error('Failed to log successful registration:', logError);
-          // Continue even if logging fails
-        }
+        // Note: Audit logging disabled during registration (user not authenticated yet)
+        // User actions will be logged after first login
         
         // Show success message
-        setError('Account created successfully! Check your email for verification.');
+        setError('Account created successfully! Redirecting to login...');
         setTimeout(() => {
           router.push('/auth/login');
-        }, 3000);
+        }, 2000);
       }
     } catch (err) {
       setError('Account creation failed. Please try again.');

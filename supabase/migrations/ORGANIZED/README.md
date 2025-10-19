@@ -18,17 +18,63 @@ Database'i kurmak için bu SQL dosyalarını **TAM OLARAK BU SIRAYLA** Supabase 
 
 ---
 
-### **SIRA 2: Temel Kurulum**
-```sql
-01_BASE_SETUP.sql
-```
-**İçerik:** Tüm core tablolar, fonksiyonlar, trigger'lar, RLS policies
-- Users, Profiles, Rooms, Messages, DM Messages
-- Friends (Nodes), Members
-- Temel fonksiyonlar ve trigger'lar
-- Tüm temel RLS policies
+### **SIRA 2: Temel Kurulum (3 PARÇA)**
 
-**⏰ Süre:** ~60-90 saniye (en büyük dosya)
+**⚠️ ÖNEMLİ:** 01_BASE_SETUP.sql çok büyük olduğu için 3 parçaya ayrıldı!
+
+#### **SIRA 2A: Tables & Indexes**
+```sql
+01A_TABLES_AND_INDEXES.sql
+```
+**İçerik:** Core tablolar ve indexler
+- users, rooms, members, messages
+- dm_threads, dm_participants, dm_messages
+- nodes (friends), ai_sessions, purge_logs
+- 13 performance index
+
+**⏰ Süre:** ~15-20 saniye
+
+#### **SIRA 2B: Functions & Triggers**
+```sql
+01B_FUNCTIONS_AND_TRIGGERS.sql
+```
+**İçerik:** Fonksiyonlar ve trigger'lar
+- handle_new_user(), update_user_last_login()
+- add_room_creator_as_member(), check_room_member_limit()
+- 7 fonksiyon, 7 trigger
+
+**⏰ Süre:** ~10 saniye
+
+#### **SIRA 2C: Permissions, RLS & Realtime**
+```sql
+01C_PERMISSIONS_RLS_REALTIME.sql
+```
+**İçerik:** İzinler, RLS policies, Realtime
+- GRANT permissions
+- 20+ RLS policy
+- Realtime enabled
+- Auth users sync
+
+**⏰ Süre:** ~15-20 saniye
+
+**📖 Detaylı bilgi:** `01_BASE_SETUP_README.md`
+
+---
+
+### **🔧 INSTANT FIX (Eğer kayıt hatası alıyorsan):**
+```sql
+FIX_AUDIT_LOGS_NOW.sql
+```
+**Ne zaman:** Kayıt sırasında "permission denied for table audit_logs" hatası alırsan
+
+**İçerik:**
+- audit_logs için GRANT permissions
+- RLS policies düzeltmesi
+- Kayıt sorununun anında çözümü
+
+**⏰ Süre:** ~5 saniye
+
+**📝 Not:** Bu dosya opsiyoneldir, sadece sorun yaşıyorsan çalıştır!
 
 ---
 
@@ -39,9 +85,11 @@ Database'i kurmak için bu SQL dosyalarını **TAM OLARAK BU SIRAYLA** Supabase 
 **İçerik:**
 - DM Notifications (unread counts)
 - DM Recursion fix
-- DM Reports support
+- DM Reports support (reports tablosu varsa)
 
 **⏰ Süre:** ~10 saniye
+
+**⚠️ Not:** reports tablosu henüz yok, uyarı göreceksin (normal!)
 
 ---
 
