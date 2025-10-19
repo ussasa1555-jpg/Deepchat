@@ -24,7 +24,7 @@ export default function HomePage() {
           {/* Header */}
           <div className="border-b-2 border-border pb-4 mb-6">
             <h1 className="text-3xl uppercase tracking-[0.3em] mb-2 text-accent retro-title">
-              DEEPCHAT v1.0
+              Deeps Rooms version 0.8
             </h1>
             <p className="text-accent text-sm retro-text">
               Secure Communication Platform
@@ -75,7 +75,7 @@ export default function HomePage() {
               </div>
               <div>
                 <span className="text-accent">• </span>
-                <span className="text-muted retro-text">Oracle 0.0.8 AI Beta</span>
+                <span className="text-muted retro-text">Oracle 0.8 AI Beta</span>
               </div>
               <div>
                 <span className="text-accent">• </span>
@@ -113,7 +113,7 @@ export default function HomePage() {
               System Status: <span className="text-success">Online</span>
             </p>
             <p className="text-xs text-muted mt-1 retro-muted">
-              Version: v1.0.0 • 2025-10-14
+              Version: 0.8.0 • 2025-01-14
             </p>
           </div>
         </div>

@@ -13,10 +13,15 @@ const firaCode = Fira_Code({
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'),
-  title: 'Deeps Rooms — Retro Privacy Chat',
+  title: 'Deeps Rooms version 0.8 — Retro Privacy Chat',
   description: 'Privacy-focused chat platform with 1980s terminal aesthetics and ephemeral messaging',
   keywords: ['chat', 'privacy', 'retro', 'terminal', 'ephemeral', 'anonymous'],
   authors: [{ name: 'Deeps Rooms Team' }],
+  icons: {
+    icon: '/icon.png',
+    shortcut: '/icon-16.png',
+    apple: '/icon-192.png',
+  },
   openGraph: {
   title: 'Deeps Rooms',
   description: 'Privacy-focused retro chat platform',
