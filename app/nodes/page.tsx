@@ -178,19 +178,28 @@ export default function NodesPage() {
     setSearchResult(null);
 
     try {
-      // Search by UID or nickname
+      // Search by UID or nickname (case-insensitive, partial match)
+      // Exclude current user from results
+      const trimmedQuery = searchQuery.trim();
+      
       const { data, error } = await supabase
         .from('users')
         .select('uid, nickname')
-        .or(`uid.eq.${searchQuery},nickname.ilike.${searchQuery}`)
-        .single();
+        .or(`uid.ilike.%${trimmedQuery}%,nickname.ilike.%${trimmedQuery}%`)
+        .neq('uid', currentUserUid)
+        .limit(1)
+        .maybeSingle();
 
-      if (error || !data) {
+      if (error) {
+        console.error('Search error:', error);
+        setSearchResult({ error: '[ERROR] SEARCH_FAILED' });
+      } else if (!data) {
         setSearchResult({ error: '[ERROR_404] NODE_NOT_FOUND' });
       } else {
         setSearchResult(data);
       }
     } catch (err) {
+      console.error('Search exception:', err);
       setSearchResult({ error: '[ERROR] SEARCH_FAILED' });
     } finally {
       setSearching(false);
@@ -200,21 +209,43 @@ export default function NodesPage() {
   const handleSendRequest = async (targetUid: string) => {
     if (!currentUserUid) return;
 
+    // Kendine istek göndermeyi engelle
+    if (currentUserUid === targetUid) {
+      alert('[ERROR] CANNOT_ADD_SELF');
+      return;
+    }
+
     try {
-      const { error } = await supabase.from('nodes').insert({
+      console.log('Sending friend request:', {
+        owner_uid: currentUserUid,
+        peer_uid: targetUid,
+      });
+
+      const { data, error } = await supabase.from('nodes').insert({
         owner_uid: currentUserUid,
         peer_uid: targetUid,
         status: 'pending',
-      });
+      }).select();
 
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase error:', error);
+        
+        // Duplicate request kontrolü
+        if (error.code === '23505') {
+          alert('[ERROR] REQUEST_ALREADY_EXISTS');
+          return;
+        }
+        
+        throw error;
+      }
 
+      console.log('Friend request sent:', data);
       setSearchResult(null);
       setSearchQuery('');
       loadNodes(currentUserUid);
     } catch (err: any) {
       console.error('Error sending request:', err);
-      alert('[ERROR] REQUEST_FAILED');
+      alert(`[ERROR] REQUEST_FAILED: ${err.message || 'Unknown error'}`);
     }
   };
 

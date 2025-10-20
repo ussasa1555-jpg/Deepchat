@@ -284,15 +284,25 @@ export default function DMPage({ params }: { params: { uid: string } }) {
         setPeerNickname(peerData.nickname);
       }
 
-      // Check if peer is blocked
-      const { data: blockData } = await supabase
-        .from('blocked_users')
-        .select('*')
-        .eq('blocker_uid', uid)
-        .eq('blocked_uid', params.uid)
-        .single();
+      // Check if peer is blocked (with error handling)
+      try {
+        const { data: blockData, error: blockError } = await supabase
+          .from('blocked_users')
+          .select('*')
+          .eq('blocker_uid', uid)
+          .eq('blocked_uid', params.uid)
+          .maybeSingle();
 
-      setIsPeerBlocked(!!blockData);
+        if (blockError) {
+          console.warn('[DM] Block check failed (non-critical):', blockError);
+          setIsPeerBlocked(false); // Default: not blocked if check fails
+        } else {
+          setIsPeerBlocked(!!blockData);
+        }
+      } catch (blockCheckError) {
+        console.warn('[DM] Block check error (continuing anyway):', blockCheckError);
+        setIsPeerBlocked(false);
+      }
 
       // Find existing thread - simplified approach
       // Get all threads for current user
@@ -327,32 +337,35 @@ export default function DMPage({ params }: { params: { uid: string } }) {
         setThreadId(foundThreadId);
         await loadMessages(foundThreadId, uid);
       } else {
-        // Create new thread
-        const { data: newThread, error: threadError } = await supabase
+        // Create new thread with manual UUID (avoids RLS SELECT issue)
+        const newThreadId = crypto.randomUUID();
+        
+        const { error: threadError } = await supabase
           .from('dm_threads')
-          .insert({})
-          .select()
-          .single();
+          .insert({ id: newThreadId });
 
         if (threadError) {
           console.error('Thread creation error:', threadError);
           throw threadError;
         }
 
-        // Add both participants
+        // Add both participants immediately
         const { error: participantsError } = await supabase
           .from('dm_participants')
           .insert([
-            { thread_id: newThread.id, uid: uid },
-            { thread_id: newThread.id, uid: params.uid },
+            { thread_id: newThreadId, uid: uid },
+            { thread_id: newThreadId, uid: params.uid },
           ]);
 
         if (participantsError) {
           console.error('Participants error:', participantsError);
+          // Rollback: delete the thread if participants fail
+          await supabase.from('dm_threads').delete().eq('id', newThreadId);
           throw participantsError;
         }
 
-        setThreadId(newThread.id);
+        setThreadId(newThreadId);
+        await loadMessages(newThreadId, uid);
       }
     } catch (err: any) {
       console.error('DM Init Error:', err);
@@ -364,6 +377,8 @@ export default function DMPage({ params }: { params: { uid: string } }) {
 
   const loadMessages = async (threadId: string, uid?: string) => {
     try {
+      console.log('[DM] Loading messages for thread:', threadId);
+      
       const { data, error } = await supabase
         .from('dm_messages')
         .select(`
@@ -374,7 +389,13 @@ export default function DMPage({ params }: { params: { uid: string } }) {
         .order('created_at', { ascending: true })
         .limit(100);
 
-      if (error) throw error;
+      if (error) {
+        console.error('[DM] Error loading messages:', error);
+        throw error;
+      }
+      
+      console.log('[DM] Loaded messages:', data?.length || 0, 'messages');
+      console.log('[DM] Messages data:', data);
       setMessages(data || []);
       
       // Mark messages as read
@@ -480,33 +501,47 @@ export default function DMPage({ params }: { params: { uid: string } }) {
 
     setSending(true);
     try {
+      // Calculate TTL: 30 days from now (matching database trigger)
+      const ttlDate = new Date();
+      ttlDate.setDate(ttlDate.getDate() + 30);
+
       let messageData: any = {
         thread_id: threadId,
         uid: currentUserUid,
         body: sanitized,
         encrypted: false,
+        ttl_at: ttlDate.toISOString(),
+        deleted: false,
       };
 
-      // Encrypt message if encryption is ready
-      if (encryptionReady) {
-        const encryptResult = await encrypt(sanitized);
-        if (encryptResult) {
-          messageData = {
-            ...messageData,
-            body: encryptResult.encrypted,
-            encrypted: true,
-            encryption_salt: encryptResult.salt,
-            encryption_iv: encryptResult.iv,
-            hmac: encryptResult.hmac,
-            nonce: encryptResult.nonce,
-            message_timestamp: Date.now(),
-          };
-        }
+      // ⚠️ ENCRYPTION TEMPORARILY DISABLED FOR TESTING
+      // TODO: Re-enable after fixing decrypt issues
+      // if (encryptionReady) {
+      //   const encryptResult = await encrypt(sanitized);
+      //   if (encryptResult) {
+      //     messageData = {
+      //       ...messageData,
+      //       body: encryptResult.encrypted,
+      //       encrypted: true,
+      //       encryption_salt: encryptResult.salt,
+      //       encryption_iv: encryptResult.iv,
+      //       hmac: encryptResult.hmac,
+      //       nonce: encryptResult.nonce,
+      //       message_timestamp: Date.now(),
+      //     };
+      //   }
+      // }
+
+      console.log('[DM] Sending message:', messageData);
+      
+      const { data, error } = await supabase.from('dm_messages').insert(messageData).select();
+
+      if (error) {
+        console.error('[DM] Error sending message:', error);
+        throw error;
       }
-
-      const { error } = await supabase.from('dm_messages').insert(messageData);
-
-      if (error) throw error;
+      
+      console.log('[DM] Message sent successfully:', data);
       setNewMessage('');
       
       // Stop typing indicator

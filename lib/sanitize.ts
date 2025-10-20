@@ -1,7 +1,6 @@
-import DOMPurify from 'isomorphic-dompurify';
-
 /**
  * Sanitize user input to prevent XSS attacks
+ * Simple regex-based sanitizer (no external deps causing build issues)
  */
 export function sanitizeInput(input: string, options?: {
   allowLinks?: boolean;
@@ -12,17 +11,25 @@ export function sanitizeInput(input: string, options?: {
   // Trim and limit length
   let sanitized = input.trim().substring(0, maxLength);
 
-  // Configure DOMPurify
-  const config: any = {
-    ALLOWED_TAGS: allowLinks ? ['a'] : [],
-    ALLOWED_ATTR: allowLinks ? ['href', 'target', 'rel'] : [],
-    ALLOW_DATA_ATTR: false,
-    ALLOW_UNKNOWN_PROTOCOLS: false,
-    SAFE_FOR_TEMPLATES: true,
-  };
+  // Remove script tags and event handlers
+  sanitized = sanitized.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+  sanitized = sanitized.replace(/on\w+\s*=\s*["'][^"']*["']/gi, '');
+  sanitized = sanitized.replace(/javascript:/gi, '');
+  
+  // Remove dangerous HTML tags
+  const dangerousTags = ['iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select'];
+  dangerousTags.forEach(tag => {
+    const regex = new RegExp(`<${tag}\\b[^<]*(?:(?!<\\/${tag}>)<[^<]*)*<\\/${tag}>`, 'gi');
+    sanitized = sanitized.replace(regex, '');
+  });
 
-  // Sanitize
-  sanitized = DOMPurify.sanitize(sanitized, config);
+  // If links not allowed, remove all HTML tags
+  if (!allowLinks) {
+    sanitized = sanitized.replace(/<[^>]*>/g, '');
+  } else {
+    // Keep only anchor tags
+    sanitized = sanitized.replace(/<(?!\/?a\b)[^>]*>/gi, '');
+  }
 
   return sanitized;
 }
@@ -43,7 +50,7 @@ export function sanitizeMessage(body: string): string {
 export function sanitizeNickname(nickname: string): string {
   // Remove all HTML and special chars except alphanumeric and underscore
   let clean = nickname.trim();
-  clean = DOMPurify.sanitize(clean, { ALLOWED_TAGS: [] });
+  clean = clean.replace(/<[^>]*>/g, '');
   clean = clean.replace(/[^a-zA-Z0-9_]/g, '');
   return clean.substring(0, 16);
 }
@@ -91,6 +98,7 @@ export function detectSuspiciousContent(text: string): {
 
   return { isSuspicious: false };
 }
+
 
 
 

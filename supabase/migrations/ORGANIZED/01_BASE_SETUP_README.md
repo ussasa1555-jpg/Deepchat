@@ -199,3 +199,4 @@ Eğer 3 parçayı da başarıyla çalıştırdıysan:
 **Not:** Eski `01_BASE_SETUP.sql` dosyası hala orada (yedek). Ama artık 01A, 01B, 01C kullan!
 
 
+

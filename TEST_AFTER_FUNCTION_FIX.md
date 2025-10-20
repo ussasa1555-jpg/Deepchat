@@ -318,3 +318,4 @@ Script çalıştıktan sonra:
 
 
 
+
