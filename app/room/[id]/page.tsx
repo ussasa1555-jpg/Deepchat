@@ -98,6 +98,8 @@ export default function RoomPage({ params }: { params: { id: string } }) {
   const [selectedUserUid, setSelectedUserUid] = useState<string | null>(null);
   const [selfDestructTime, setSelfDestructTime] = useState<number | null>(null);
   const [currentTime, setCurrentTime] = useState(Date.now());
+  const [bannedUsers, setBannedUsers] = useState<any[]>([]);
+  const [showBannedUsers, setShowBannedUsers] = useState(false);
   const [decryptedMessages, setDecryptedMessages] = useState<Map<string, string>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -318,13 +320,75 @@ export default function RoomPage({ params }: { params: { id: string } }) {
               .then(({ data }) => {
                 if (data && isSubscribed) {
                   console.log('[ROOM] Adding message to state:', data);
-                  setMessages((prev) => [...prev, data as Message]);
+                  setMessages((prev) => {
+                    // Prevent duplicate messages
+                    if (prev.some(msg => msg.id === data.id)) {
+                      console.log('[ROOM] Message already exists, skipping:', data.id);
+                      return prev;
+                    }
+                    return [...prev, data as Message];
+                  });
                   // Play notification sound if message is from other user
                   if (data.uid !== currentUserUid) {
                     playNotification();
                   }
                 }
               });
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'messages',
+            filter: `room_id=eq.${params.id}`,
+          },
+          (payload) => {
+            if (!isSubscribed) return;
+            
+            console.log('[ROOM] Message updated:', payload);
+            const updatedMsg = payload.new as Message;
+            
+            // Fetch full message with user data
+            supabase
+              .from('messages')
+              .select(`*, users:uid (nickname, role)`)
+              .eq('id', updatedMsg.id)
+              .single()
+              .then(({ data }) => {
+                if (data && isSubscribed) {
+                  setMessages((prev) => {
+                    const exists = prev.some(msg => msg.id === data.id);
+                    if (!exists) {
+                      console.log('[ROOM] Updated message not found, adding it:', data.id);
+                      return [...prev, data as Message];
+                    }
+                    return prev.map((msg) =>
+                      msg.id === data.id ? { ...msg, ...data } : msg
+                    );
+                  });
+                }
+              });
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: 'DELETE',
+            schema: 'public',
+            table: 'messages',
+            filter: `room_id=eq.${params.id}`,
+          },
+          (payload) => {
+            if (!isSubscribed) return;
+            
+            console.log('[ROOM] Message deleted:', payload);
+            const deletedId = payload.old.id;
+            
+            setMessages((prev) =>
+              prev.filter((msg) => msg.id !== deletedId)
+            );
           }
         )
         .on(
@@ -435,6 +499,20 @@ export default function RoomPage({ params }: { params: { id: string } }) {
 
       setRoom(roomData);
 
+      // Check if user is banned from this room
+      const { data: banCheck } = await supabase
+        .from('room_bans')
+        .select('reason')
+        .eq('room_id', params.id)
+        .eq('banned_uid', uid)
+        .maybeSingle();
+
+      if (banCheck) {
+        setError(`[ERROR_403] BANNED_FROM_ROOM\n\nYou have been banned from this room.\nReason: ${banCheck.reason || 'No reason provided'}`);
+        setLoading(false);
+        return;
+      }
+
       // Check membership or auto-join public room
       const { data: membership } = await supabase
         .from('members')
@@ -452,9 +530,12 @@ export default function RoomPage({ params }: { params: { id: string } }) {
         });
       }
 
-      // Load messages and members
+      // Load messages, members, and banned users
       loadMessages();
       loadMembers();
+      if (room?.created_by === uid) {
+        loadBannedUsers(); // Only owner needs to see banned users
+      }
     } catch (err: any) {
       console.error('Error:', err);
       setError('[ERROR] INITIALIZATION_FAILED');
@@ -518,6 +599,70 @@ export default function RoomPage({ params }: { params: { id: string } }) {
       setMemberCount(data?.length || 0);
     } catch (err) {
       console.error('Error loading members:', err);
+    }
+  };
+
+  const loadBannedUsers = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('room_bans')
+        .select(`
+          id,
+          banned_uid,
+          reason,
+          created_at,
+          users:banned_uid (nickname)
+        `)
+        .eq('room_id', params.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setBannedUsers(data || []);
+    } catch (err) {
+      console.error('Error loading banned users:', err);
+    }
+  };
+
+  const handleBanUser = async (uid: string, nickname: string) => {
+    if (!currentUserUid || room?.created_by !== currentUserUid) {
+      toast.error('[ERROR] Only owner can ban users');
+      return;
+    }
+
+    const reason = prompt(`Ban ${nickname} from this room?\nReason (optional):`);
+    if (reason === null) return; // Cancelled
+
+    try {
+      // Add ban
+      await supabase.from('room_bans').insert({
+        room_id: params.id,
+        banned_uid: uid,
+        banned_by: currentUserUid,
+        reason: reason || 'No reason provided',
+      });
+
+      // Kick user from room
+      await supabase.from('members').delete()
+        .eq('room_id', params.id)
+        .eq('uid', uid);
+
+      toast.success(`[SUCCESS] ${nickname} banned from room`);
+      loadMembers();
+      loadBannedUsers();
+    } catch (err: any) {
+      console.error('Error banning user:', err);
+      toast.error('[ERROR] BAN_FAILED');
+    }
+  };
+
+  const handleUnbanUser = async (banId: string, nickname: string) => {
+    try {
+      await supabase.from('room_bans').delete().eq('id', banId);
+      toast.success(`[SUCCESS] ${nickname} unbanned`);
+      loadBannedUsers();
+    } catch (err: any) {
+      console.error('Error unbanning user:', err);
+      toast.error('[ERROR] UNBAN_FAILED');
     }
   };
 
@@ -586,9 +731,30 @@ export default function RoomPage({ params }: { params: { id: string } }) {
         messageData.self_destruct_at = destructAt.toISOString();
       }
 
-      const { error } = await supabase.from('messages').insert(messageData);
+      const { data, error } = await supabase
+        .from('messages')
+        .insert(messageData)
+        .select(`
+          *,
+          users:uid (nickname, role)
+        `)
+        .single();
 
       if (error) throw error;
+      
+      // Immediately add message to local state
+      if (data) {
+        console.log('[ROOM] ✅ Message sent, adding to state:', data.id);
+        setMessages((prev) => {
+          // Check for duplicate
+          if (prev.some(msg => msg.id === data.id)) {
+            console.log('[ROOM] ⚠️ Message already in state');
+            return prev;
+          }
+          return [...prev, data as Message];
+        });
+      }
+      
       setNewMessage('');
       setSelfDestructTime(null);
       
@@ -929,27 +1095,91 @@ export default function RoomPage({ params }: { params: { id: string } }) {
                     Members ({memberCount})
                   </h3>
                   <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar">
-                    {members.map((member) => (
-                      <div
-                        key={member.uid}
-                        className="flex items-center justify-between text-sm py-1 border-b border-gray-700"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="status-led online" />
-                          <span className="text-accent">
-                            {member.users?.nickname || member.uid}
-                          </span>
-                          {member.role === 'admin' && (
-                            <span className="text-xs text-retro-magenta">[ADMIN]</span>
-                          )}
+                    {members.map((member) => {
+                      const isOwner = room?.created_by === member.uid;
+                      const isCurrentUser = member.uid === currentUserUid;
+                      const canBan = room?.created_by === currentUserUid && !isOwner && !isCurrentUser;
+                      
+                      return (
+                        <div
+                          key={member.uid}
+                          className="flex items-center justify-between text-sm py-1 border-b border-gray-700"
+                        >
+                          <div className="flex items-center gap-2 flex-1">
+                            <span className="status-led online" />
+                            <span className="text-accent">
+                              {member.users?.nickname || member.uid}
+                            </span>
+                            {isOwner && (
+                              <span className="text-xs text-yellow-400 font-bold">[OWNER]</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-retro-gray">
+                              {new Date(member.joined_at).toLocaleDateString()}
+                            </span>
+                            {canBan && (
+                              <button
+                                onClick={() => handleBanUser(member.uid, member.users?.nickname || member.uid)}
+                                className="text-xs text-error hover:text-red-400 transition-colors px-2 py-1 border border-error hover:bg-error/10"
+                              >
+                                [BAN]
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        <span className="text-xs text-retro-gray">
-                          {new Date(member.joined_at).toLocaleDateString()}
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
+
+                {/* Banned Users (Owner Only) */}
+                {room?.created_by === currentUserUid && (
+                  <div className="border-t border-border pt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-error text-sm uppercase">
+                        Banned Users ({bannedUsers.length})
+                      </h3>
+                      <button
+                        onClick={() => setShowBannedUsers(!showBannedUsers)}
+                        className="text-xs text-accent hover:text-white transition-colors"
+                      >
+                        [{showBannedUsers ? 'Hide' : 'Show'}]
+                      </button>
+                    </div>
+                    {showBannedUsers && (
+                      <div className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
+                        {bannedUsers.length === 0 ? (
+                          <p className="text-xs text-dim italic">No banned users</p>
+                        ) : (
+                          bannedUsers.map((ban) => (
+                            <div
+                              key={ban.id}
+                              className="flex items-center justify-between text-sm py-1 border-b border-gray-700"
+                            >
+                              <div className="flex-1">
+                                <span className="text-error">
+                                  {ban.users?.nickname || ban.banned_uid}
+                                </span>
+                                {ban.reason && (
+                                  <p className="text-xs text-dim italic mt-0.5">
+                                    "{ban.reason}"
+                                  </p>
+                                )}
+                              </div>
+                              <button
+                                onClick={() => handleUnbanUser(ban.id, ban.users?.nickname || ban.banned_uid)}
+                                className="text-xs text-accent hover:text-green-400 transition-colors px-2 py-1 border border-accent hover:bg-accent/10"
+                              >
+                                [UNBAN]
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Danger Zone */}
                 <div className="border-t border-error pt-4">

@@ -200,3 +200,4 @@ Eğer 3 parçayı da başarıyla çalıştırdıysan:
 
 
 
+

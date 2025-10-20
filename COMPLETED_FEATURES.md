@@ -314,3 +314,4 @@ Proje **%70 tamamlandı** ve **temel özellikler çalışıyor!**
 
 
 
+

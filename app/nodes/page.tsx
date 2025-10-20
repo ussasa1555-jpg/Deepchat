@@ -43,6 +43,8 @@ export default function NodesPage() {
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [currentUserUid, setCurrentUserUid] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [friendToDelete, setFriendToDelete] = useState<{ nodeId: string; nickname: string } | null>(null);
   
   const { isUserOnline } = usePresence();
 
@@ -303,20 +305,28 @@ export default function NodesPage() {
     }
   };
 
-  const handleDeleteFriend = async (nodeId: string) => {
+  const handleDeleteFriend = async (nodeId: string, nickname: string) => {
     if (!currentUserUid) return;
     
-    if (!confirm('Remove this friend from your connections?')) return;
+    // Show confirmation modal
+    setFriendToDelete({ nodeId, nickname });
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDeleteFriend = async () => {
+    if (!friendToDelete || !currentUserUid) return;
 
     try {
       const { error } = await supabase
         .from('nodes')
         .delete()
-        .eq('id', nodeId);
+        .eq('id', friendToDelete.nodeId);
 
       if (error) throw error;
 
       loadNodes(currentUserUid);
+      setShowDeleteConfirm(false);
+      setFriendToDelete(null);
     } catch (err: any) {
       console.error('Error deleting friend:', err);
       alert('[ERROR] DELETE_FAILED');
@@ -467,11 +477,6 @@ export default function NodesPage() {
                     <NeonButton onClick={() => handleSendRequest(searchResult.uid)} className="flex-1">
                       [Add Friend]
                     </NeonButton>
-                    <Link href={`/dm/${searchResult.uid}`} className="flex-1">
-                      <NeonButton variant="secondary" className="w-full">
-                        [Send DM]
-                      </NeonButton>
-                    </Link>
                   </div>
                 </div>
               )}
@@ -611,7 +616,7 @@ export default function NodesPage() {
                         </Link>
                         <NeonButton 
                           variant="danger"
-                          onClick={() => handleDeleteFriend(node.id)}
+                          onClick={() => handleDeleteFriend(node.id, friendNickname)}
                         >
                           [X]
                         </NeonButton>
@@ -625,6 +630,50 @@ export default function NodesPage() {
         </div>
         </div>
       </div>
+
+      {/* Delete Friend Confirmation Modal */}
+      {showDeleteConfirm && friendToDelete && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+          <TerminalPanel className="max-w-md w-full">
+            <div className="space-y-4">
+              <div className="border-b-2 border-border pb-4">
+                <h3 className="text-accent font-bold font-mono text-lg">
+                  [CONFIRM_DELETION]
+                </h3>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-white font-mono text-sm">
+                  Remove <span className="text-accent font-bold">{friendToDelete.nickname}</span> from your connections?
+                </p>
+                <p className="text-dim font-mono text-xs">
+                  This will permanently delete the connection. You can reconnect later if needed.
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <NeonButton
+                  variant="danger"
+                  onClick={confirmDeleteFriend}
+                  className="flex-1"
+                >
+                  [Confirm Delete]
+                </NeonButton>
+                <NeonButton
+                  variant="secondary"
+                  onClick={() => {
+                    setShowDeleteConfirm(false);
+                    setFriendToDelete(null);
+                  }}
+                  className="flex-1"
+                >
+                  [Cancel]
+                </NeonButton>
+              </div>
+            </div>
+          </TerminalPanel>
+        </div>
+      )}
     </div>
   );
 }

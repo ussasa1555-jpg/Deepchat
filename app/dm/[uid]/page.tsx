@@ -304,40 +304,35 @@ export default function DMPage({ params }: { params: { uid: string } }) {
         setIsPeerBlocked(false);
       }
 
-      // Find existing thread - simplified approach
-      // Get all threads for current user
-      const { data: myParticipations } = await supabase
-        .from('dm_participants')
-        .select('thread_id')
-        .eq('uid', uid);
+      // Check if users are friends (accepted connection)
+      const { data: friendshipData } = await supabase
+        .from('nodes')
+        .select('*')
+        .or(`and(owner_uid.eq.${uid},peer_uid.eq.${params.uid}),and(owner_uid.eq.${params.uid},peer_uid.eq.${uid})`)
+        .eq('status', 'accepted')
+        .maybeSingle();
 
-      let foundThreadId = null;
-
-      if (myParticipations && myParticipations.length > 0) {
-        // For each thread, check if peer is also a participant
-        for (const participation of myParticipations) {
-          const { data: participants } = await supabase
-            .from('dm_participants')
-            .select('uid')
-            .eq('thread_id', participation.thread_id);
-          
-          // Check if this thread has exactly 2 participants and one is the peer
-          if (participants && participants.length === 2) {
-            const uids = participants.map(p => p.uid);
-            if (uids.includes(uid) && uids.includes(params.uid)) {
-              foundThreadId = participation.thread_id;
-              break;
-            }
-          }
-        }
+      if (!friendshipData) {
+        setError('[ERROR_403] FRIENDSHIP_REQUIRED\n\nYou must be friends to send direct messages.\nGo to /nodes and send a friend request first.');
+        setLoading(false);
+        return;
       }
 
-      if (foundThreadId) {
-        // Existing thread found
-        setThreadId(foundThreadId);
-        await loadMessages(foundThreadId, uid);
-      } else {
-        // Create new thread with manual UUID (avoids RLS SELECT issue)
+      // Find existing thread - SIMPLIFIED & FIXED
+      console.log('[DM] 🔍 Finding thread between', uid, 'and', params.uid);
+      
+      // Use RPC function to find thread (more reliable)
+      const { data: existingThread } = await supabase.rpc('find_dm_thread', {
+        user1: uid,
+        user2: params.uid
+      });
+
+      let threadToUse = existingThread;
+
+      if (!threadToUse) {
+        console.log('[DM] 📝 No thread found, creating new one');
+        
+        // Create new thread
         const newThreadId = crypto.randomUUID();
         
         const { error: threadError } = await supabase
@@ -345,11 +340,11 @@ export default function DMPage({ params }: { params: { uid: string } }) {
           .insert({ id: newThreadId });
 
         if (threadError) {
-          console.error('Thread creation error:', threadError);
+          console.error('[DM] ❌ Thread creation error:', threadError);
           throw threadError;
         }
 
-        // Add both participants immediately
+        // Add both participants
         const { error: participantsError } = await supabase
           .from('dm_participants')
           .insert([
@@ -358,15 +353,19 @@ export default function DMPage({ params }: { params: { uid: string } }) {
           ]);
 
         if (participantsError) {
-          console.error('Participants error:', participantsError);
-          // Rollback: delete the thread if participants fail
+          console.error('[DM] ❌ Participants error:', participantsError);
           await supabase.from('dm_threads').delete().eq('id', newThreadId);
           throw participantsError;
         }
 
-        setThreadId(newThreadId);
-        await loadMessages(newThreadId, uid);
+        threadToUse = newThreadId;
+        console.log('[DM] ✅ Created thread:', newThreadId);
+      } else {
+        console.log('[DM] ✅ Found existing thread:', threadToUse);
       }
+
+      setThreadId(threadToUse);
+      await loadMessages(threadToUse, uid);
     } catch (err: any) {
       console.error('DM Init Error:', err);
       setError(`[ERROR] ${err.message || 'FAILED_TO_INITIALIZE_CHANNEL'}`);
@@ -394,8 +393,8 @@ export default function DMPage({ params }: { params: { uid: string } }) {
         throw error;
       }
       
-      console.log('[DM] Loaded messages:', data?.length || 0, 'messages');
-      console.log('[DM] Messages data:', data);
+      console.log('[DM] ✅ Loaded messages:', data?.length || 0, 'messages');
+      console.log('[DM] 📋 Message UIDs:', data?.map(m => ({ uid: m.uid, body: m.body?.substring(0, 20) })));
       setMessages(data || []);
       
       // Mark messages as read
@@ -436,7 +435,9 @@ export default function DMPage({ params }: { params: { uid: string } }) {
   };
 
   const subscribeToMessages = (threadId: string, userUid: string, isSubscribed: () => boolean) => {
-    console.log('[DM] Subscribing to thread:', threadId);
+    console.log('[DM] 🔌 Subscribing to thread:', threadId);
+    console.log('[DM] 🔌 User UID:', userUid);
+    console.log('[DM] 🔌 Filter will be: thread_id=eq.' + threadId);
     
     const channel = supabase
       .channel(`dm:${threadId}`)
@@ -461,8 +462,17 @@ export default function DMPage({ params }: { params: { uid: string } }) {
             .single()
             .then(({ data }) => {
               if (data && isSubscribed()) {
-                console.log('[DM] Adding message to state:', data);
-                setMessages((prev) => [...prev, data as Message]);
+                console.log('[DM] ➕ Adding message to state:', data.id);
+                setMessages((prev) => {
+                  // Simple duplicate check
+                  const exists = prev.find(msg => msg.id === data.id);
+                  if (exists) {
+                    console.log('[DM] ⚠️ Duplicate skipped:', data.id);
+                    return prev;
+                  }
+                  console.log('[DM] ✅ Message added');
+                  return [...prev, data as Message];
+                });
                 // Mark as read when new message arrives while viewing
                 markAsRead(threadId);
                 // Play notification sound if message is from other user
@@ -475,8 +485,72 @@ export default function DMPage({ params }: { params: { uid: string } }) {
             });
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'dm_messages',
+          filter: `thread_id=eq.${threadId}`,
+        },
+        (payload) => {
+          if (!isSubscribed()) return;
+          
+          console.log('[DM] Message updated:', payload);
+          const updatedMsg = payload.new as Message;
+          
+          // Fetch full message with user data
+          supabase
+            .from('dm_messages')
+            .select(`*, users:uid (nickname, role)`)
+            .eq('id', updatedMsg.id)
+            .single()
+            .then(({ data }) => {
+              if (data && isSubscribed()) {
+                setMessages((prev) => {
+                  const exists = prev.some(msg => msg.id === data.id);
+                  if (!exists) {
+                    console.log('[DM] Updated message not found, adding it:', data.id);
+                    return [...prev, data as Message];
+                  }
+                  return prev.map((msg) =>
+                    msg.id === data.id ? { ...msg, ...data } : msg
+                  );
+                });
+              }
+            });
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'dm_messages',
+          filter: `thread_id=eq.${threadId}`,
+        },
+        (payload) => {
+          if (!isSubscribed()) return;
+          
+          console.log('[DM] Message deleted:', payload);
+          const deletedId = payload.old.id;
+          
+          setMessages((prev) =>
+            prev.filter((msg) => msg.id !== deletedId)
+          );
+        }
+      )
       .subscribe((status) => {
-        console.log('[DM] Subscription status:', status);
+        console.log('[DM] 📡 Subscription status:', status);
+        if (status === 'SUBSCRIBED') {
+          console.log('[DM] ✅ Successfully subscribed to thread:', threadId);
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('[DM] ❌ CHANNEL_ERROR - Subscription failed!');
+        } else if (status === 'TIMED_OUT') {
+          console.error('[DM] ⏱️ TIMED_OUT - Subscription timeout!');
+        } else if (status === 'CLOSED') {
+          console.warn('[DM] 🔒 CLOSED - Channel closed!');
+        }
       });
       
     return channel;
@@ -532,16 +606,25 @@ export default function DMPage({ params }: { params: { uid: string } }) {
       //   }
       // }
 
-      console.log('[DM] Sending message:', messageData);
+      console.log('[DM] 📤 Sending message:', {
+        thread_id: messageData.thread_id,
+        uid: messageData.uid,
+        body: messageData.body.substring(0, 50) + '...',
+        current_threadId_state: threadId
+      });
       
       const { data, error } = await supabase.from('dm_messages').insert(messageData).select();
 
       if (error) {
-        console.error('[DM] Error sending message:', error);
+        console.error('[DM] ❌ Error sending message:', error);
         throw error;
       }
       
-      console.log('[DM] Message sent successfully:', data);
+      console.log('[DM] ✅ Message sent successfully:', {
+        id: data[0]?.id,
+        thread_id: data[0]?.thread_id,
+        uid: data[0]?.uid
+      });
       setNewMessage('');
       
       // Stop typing indicator
