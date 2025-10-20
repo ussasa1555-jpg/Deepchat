@@ -26,6 +26,21 @@ const nextConfig = {
     ignoreDuringBuilds: true,
   },
 
+  // Webpack config for Signal Protocol (browser compatibility)
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      // Browser-side: ignore Node.js modules
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        net: false,
+        tls: false,
+        crypto: false,
+      };
+    }
+    return config;
+  },
+
   // Security headers
   async headers() {
     return [

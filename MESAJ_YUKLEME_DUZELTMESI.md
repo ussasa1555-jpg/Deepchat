@@ -133,3 +133,4 @@ Artık console'da şunları göreceksiniz:
 
 Bu loglar sorun olup olmadığını görmenizi sağlar.
 
+

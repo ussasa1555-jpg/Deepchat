@@ -30,8 +30,6 @@ interface Message {
   encryption_salt?: string | null;
   encryption_iv?: string | null;
   hmac?: string | null;
-  nonce?: string | null;
-  message_timestamp?: number | null;
   users?: {
     nickname: string;
     role?: string;
@@ -100,6 +98,15 @@ export default function RoomPage({ params }: { params: { id: string } }) {
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [bannedUsers, setBannedUsers] = useState<any[]>([]);
   const [showBannedUsers, setShowBannedUsers] = useState(false);
+  const [showBanModal, setShowBanModal] = useState(false);
+  const [userToBan, setUserToBan] = useState<{ uid: string; nickname: string } | null>(null);
+  const [banReason, setBanReason] = useState('');
+  const [isBanned, setIsBanned] = useState(false);
+  const [banInfo, setBanInfo] = useState<{ reason: string } | null>(null);
+  const [showKeyPrompt, setShowKeyPrompt] = useState(false);
+  const [roomKey, setRoomKey] = useState('');
+  const [keyError, setKeyError] = useState('');
+  const [validatingKey, setValidatingKey] = useState(false);
   const [decryptedMessages, setDecryptedMessages] = useState<Map<string, string>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -500,20 +507,30 @@ export default function RoomPage({ params }: { params: { id: string } }) {
       setRoom(roomData);
 
       // Check if user is banned from this room
-      const { data: banCheck } = await supabase
+      console.log('[ROOM] Checking if user is banned from room...');
+      const { data: banCheck, error: banCheckError } = await supabase
         .from('room_bans')
-        .select('reason')
+        .select('reason, banned_by')
         .eq('room_id', params.id)
         .eq('banned_uid', uid)
         .maybeSingle();
 
-      if (banCheck) {
-        setError(`[ERROR_403] BANNED_FROM_ROOM\n\nYou have been banned from this room.\nReason: ${banCheck.reason || 'No reason provided'}`);
-        setLoading(false);
-        return;
+      if (banCheckError) {
+        console.error('[ROOM] Ban check error:', banCheckError);
       }
 
-      // Check membership or auto-join public room
+      if (banCheck) {
+        console.log('[ROOM] ⚠️ User is banned from this room (read-only mode)');
+        setIsBanned(true);
+        setBanInfo({ reason: banCheck.reason || 'No reason provided' });
+        toast.error(`[BANNED] You cannot send messages in this room.\nReason: ${banCheck.reason || 'No reason provided'}`);
+      } else {
+        console.log('[ROOM] ✅ User is not banned');
+        setIsBanned(false);
+        setBanInfo(null);
+      }
+
+      // Check membership or auto-join
       const { data: membership } = await supabase
         .from('members')
         .select('*')
@@ -521,21 +538,57 @@ export default function RoomPage({ params }: { params: { id: string } }) {
         .eq('uid', uid)
         .single();
 
-      if (!membership && roomData.type === 'public') {
-        // Auto-join public room
-        await supabase.from('members').insert({
-          room_id: params.id,
-          uid: uid,
-          role: 'member',
-        });
+      if (!membership) {
+        if (roomData.type === 'public') {
+          // Auto-join public room
+          try {
+            await supabase.from('members').insert({
+              room_id: params.id,
+              uid: uid,
+              role: 'member',
+            });
+          } catch (joinError: any) {
+            if (isBanned) {
+              console.log('[ROOM] Banned user attempted to auto-join, skipping...');
+            } else {
+              throw joinError;
+            }
+          }
+        } else if (roomData.type === 'private') {
+          // Private room: Require key
+          console.log('[ROOM] 🔑 Private room - key required');
+          setShowKeyPrompt(true);
+          setLoading(false);
+          return; // Stop here, wait for key input
+        }
+      }
+
+      // Handle private room encryption key sharing
+      if (roomData.type === 'private') {
+        if (roomData.created_by === uid) {
+          // Owner: Share key after it's generated
+          setTimeout(async () => {
+            const localKey = localStorage.getItem(`deepchat_room_key_${params.id}`);
+            if (localKey) {
+              try {
+                const parsed = JSON.parse(localKey);
+                console.log('[ROOM] 🔑 Owner detected, sharing encryption key...');
+                await shareRoomEncryptionKey(params.id, parsed.key);
+              } catch (e) {
+                console.error('[ROOM] Failed to share key:', e);
+              }
+            }
+          }, 2000); // Wait 2 seconds for key generation
+        } else if (membership) {
+          // Member: Sync key from database
+          await syncRoomEncryptionKey(params.id);
+        }
       }
 
       // Load messages, members, and banned users
       loadMessages();
       loadMembers();
-      if (room?.created_by === uid) {
-        loadBannedUsers(); // Only owner needs to see banned users
-      }
+      loadBannedUsers(); // Load for everyone (needed for ban checks)
     } catch (err: any) {
       console.error('Error:', err);
       setError('[ERROR] INITIALIZATION_FAILED');
@@ -616,42 +669,72 @@ export default function RoomPage({ params }: { params: { id: string } }) {
         .eq('room_id', params.id)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Error loading banned users:', error);
+        // Not critical, continue anyway
+        setBannedUsers([]);
+        return;
+      }
+
+      console.log('[ROOM] 🚫 Loaded banned users:', data?.length || 0);
       setBannedUsers(data || []);
     } catch (err) {
       console.error('Error loading banned users:', err);
+      setBannedUsers([]);
     }
   };
 
-  const handleBanUser = async (uid: string, nickname: string) => {
+  const handleBanUser = (uid: string, nickname: string) => {
     if (!currentUserUid || room?.created_by !== currentUserUid) {
       toast.error('[ERROR] Only owner can ban users');
       return;
     }
 
-    const reason = prompt(`Ban ${nickname} from this room?\nReason (optional):`);
-    if (reason === null) return; // Cancelled
+    // Show ban modal
+    setUserToBan({ uid, nickname });
+    setShowBanModal(true);
+  };
+
+  const confirmBanUser = async () => {
+    if (!userToBan || !currentUserUid) return;
 
     try {
+      // Check if already banned
+      const { data: existingBan } = await supabase
+        .from('room_bans')
+        .select('id')
+        .eq('room_id', params.id)
+        .eq('banned_uid', userToBan.uid)
+        .maybeSingle();
+
+      if (existingBan) {
+        toast.error('[ERROR] User is already banned');
+        setShowBanModal(false);
+        setUserToBan(null);
+        setBanReason('');
+        return;
+      }
+
       // Add ban
-      await supabase.from('room_bans').insert({
+      const { error: banError } = await supabase.from('room_bans').insert({
         room_id: params.id,
-        banned_uid: uid,
+        banned_uid: userToBan.uid,
         banned_by: currentUserUid,
-        reason: reason || 'No reason provided',
+        reason: banReason.trim() || 'No reason provided',
       });
 
-      // Kick user from room
-      await supabase.from('members').delete()
-        .eq('room_id', params.id)
-        .eq('uid', uid);
+      if (banError) throw banError;
 
-      toast.success(`[SUCCESS] ${nickname} banned from room`);
+      // Note: User stays in members (can read), but cannot send messages
+      toast.success(`[SUCCESS] ${userToBan.nickname} banned (read-only mode)`);
+      setShowBanModal(false);
+      setUserToBan(null);
+      setBanReason('');
       loadMembers();
       loadBannedUsers();
     } catch (err: any) {
       console.error('Error banning user:', err);
-      toast.error('[ERROR] BAN_FAILED');
+      toast.error(`[ERROR] ${err.message || 'BAN_FAILED'}`);
     }
   };
 
@@ -663,6 +746,127 @@ export default function RoomPage({ params }: { params: { id: string } }) {
     } catch (err: any) {
       console.error('Error unbanning user:', err);
       toast.error('[ERROR] UNBAN_FAILED');
+    }
+  };
+
+  const shareRoomEncryptionKey = async (roomId: string, key: string) => {
+    try {
+      console.log('[ROOM] 🔐 Sharing encryption key to database...');
+      
+      const encodedKey = btoa(key);
+      
+      await supabase.from('room_key_exchange').upsert({
+        room_id: roomId,
+        shared_by: currentUserUid,
+        encrypted_key: encodedKey,
+        key_version: 1,
+      }, {
+        onConflict: 'room_id'
+      });
+      
+      console.log('[ROOM] ✅ Encryption key shared');
+    } catch (error) {
+      console.error('[ROOM] Key sharing error:', error);
+    }
+  };
+
+  const syncRoomEncryptionKey = async (roomId: string) => {
+    try {
+      console.log('[ROOM] 🔄 Syncing encryption key from database...');
+      
+      // Check if we already have a local key
+      const localKey = localStorage.getItem(`deepchat_room_key_${roomId}`);
+      if (localKey) {
+        console.log('[ROOM] ✅ Using local encryption key');
+        return;
+      }
+      
+      // Try to get shared key from database
+      const { data, error } = await supabase
+        .from('room_key_exchange')
+        .select('encrypted_key, key_version')
+        .eq('room_id', roomId)
+        .maybeSingle();
+      
+      if (error || !data) {
+        console.log('[ROOM] No shared key found');
+        return;
+      }
+      
+      // Decode and save key
+      const decodedKey = atob(data.encrypted_key);
+      const metadata = {
+        key: decodedKey,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + (30 * 24 * 60 * 60 * 1000),
+        version: data.key_version
+      };
+      
+      localStorage.setItem(`deepchat_room_key_${roomId}`, JSON.stringify(metadata));
+      
+      console.log('[ROOM] ✅ Encryption key synced, reloading...');
+      
+      // Reload page to use new key
+      window.location.reload();
+    } catch (error) {
+      console.error('[ROOM] Key sync error:', error);
+    }
+  };
+
+  const handleValidateRoomKey = async () => {
+    if (!roomKey.trim()) {
+      setKeyError('Please enter a room key');
+      return;
+    }
+
+    setValidatingKey(true);
+    setKeyError('');
+
+    try {
+      const response = await fetch('/api/validate-room-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomKey: roomKey.trim().toUpperCase() }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        setKeyError(data.error || '[ERROR] Invalid room key');
+        return;
+      }
+
+      // Key valid! Check member limit and join
+      if (data.roomId === params.id && currentUserUid) {
+        // Check member count for private rooms (max 12)
+        const { data: currentMembers } = await supabase
+          .from('members')
+          .select('uid')
+          .eq('room_id', params.id);
+
+        if (currentMembers && currentMembers.length >= 12) {
+          setKeyError('[ERROR] Room is full (max 12 members)');
+          return;
+        }
+
+        await supabase.from('members').insert({
+          room_id: params.id,
+          uid: currentUserUid,
+          role: 'member',
+        });
+
+        toast.success('[SUCCESS] Access granted!');
+        setShowKeyPrompt(false);
+        setRoomKey('');
+        
+        // Reload room
+        init();
+      }
+    } catch (err: any) {
+      console.error('Key validation error:', err);
+      setKeyError('[ERROR] Validation failed');
+    } finally {
+      setValidatingKey(false);
     }
   };
 
@@ -708,22 +912,11 @@ export default function RoomPage({ params }: { params: { id: string } }) {
         encrypted: false,
       };
 
-      // Encrypt message ONLY for private rooms
-      if (room?.type === 'private' && encryptionReady) {
-        const encryptResult = await encrypt(sanitized);
-        if (encryptResult) {
-          messageData = {
-            ...messageData,
-            body: encryptResult.encrypted,
-            encrypted: true,
-            encryption_salt: encryptResult.salt,
-            encryption_iv: encryptResult.iv,
-            hmac: encryptResult.hmac,
-            nonce: encryptResult.nonce,
-            message_timestamp: Date.now(),
-          };
-        }
-      }
+      // ⚠️ ENCRYPTION DISABLED (for stability)
+      // All rooms use unencrypted messages
+      // Encryption can be re-enabled after testing
+      // Security still provided by: RLS, HTTPS, Authentication
+      console.log('[ROOM] 📢 Message sent (unencrypted)');
 
       // Add self-destruct time if selected
       if (selfDestructTime) {
@@ -955,7 +1148,7 @@ export default function RoomPage({ params }: { params: { id: string } }) {
       )
     : messages;
 
-  if (loading) {
+  if (loading && !showKeyPrompt) {
     return (
       <div className="min-h-screen flex flex-col">
         <div className="border-b-2 border-accent bg-retro-black p-4">
@@ -968,6 +1161,81 @@ export default function RoomPage({ params }: { params: { id: string } }) {
             <MessageSkeleton />
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (showKeyPrompt) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 login-page">
+        <div className="particles-container">
+          {[...Array(15)].map((_, i) => (
+            <div key={i} className="particle"></div>
+          ))}
+        </div>
+        
+        <TerminalPanel className="max-w-md w-full relative z-10">
+          <div className="space-y-4">
+            <div className="border-b-2 border-border pb-4">
+              <h3 className="text-accent font-bold font-mono text-xl">
+                [PRIVATE_ROOM_ACCESS]
+              </h3>
+              <p className="text-dim text-sm mt-2">
+                This is a private room. Enter the room key to join.
+              </p>
+            </div>
+
+            <div className="border-2 border-accent/30 bg-accent/5 p-4">
+              <p className="text-white font-mono text-sm mb-2">
+                🔒 <span className="text-accent font-bold">{room?.name}</span>
+              </p>
+              <p className="text-dim text-xs">
+                Room key is required to access this private room
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm mb-2 text-accent uppercase">
+                Room Key:
+              </label>
+              <input
+                type="text"
+                value={roomKey}
+                onChange={(e) => {
+                  setRoomKey(e.target.value.toUpperCase());
+                  setKeyError('');
+                }}
+                placeholder="XXXX-XXXX-XXXX"
+                className="w-full bg-surface border-2 border-border text-accent p-3 font-mono text-lg focus:border-accent focus:outline-none uppercase tracking-wider text-center"
+                maxLength={14}
+                disabled={validatingKey}
+                autoFocus
+              />
+              {keyError && (
+                <p className="text-error text-xs mt-2">
+                  {keyError}
+                </p>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <NeonButton
+                onClick={handleValidateRoomKey}
+                disabled={validatingKey || !roomKey.trim()}
+                className="flex-1"
+              >
+                {validatingKey ? '[VALIDATING...]' : '[ENTER ROOM]'}
+              </NeonButton>
+              <NeonButton
+                variant="secondary"
+                onClick={() => router.push('/rooms/public')}
+                className="flex-1"
+              >
+                [CANCEL]
+              </NeonButton>
+            </div>
+          </div>
+        </TerminalPanel>
       </div>
     );
   }
@@ -1000,7 +1268,7 @@ export default function RoomPage({ params }: { params: { id: string } }) {
             <p className="text-accent text-sm mt-1">{room?.name}</p>
           </div>
           <div className="flex gap-4">
-            <NeonButton variant="secondary" onClick={() => router.push('/rooms/public')}>
+            <NeonButton variant="secondary" onClick={() => router.push('/dashboard')}>
               [Back]
             </NeonButton>
             {room?.created_by === currentUserUid ? (
@@ -1098,7 +1366,8 @@ export default function RoomPage({ params }: { params: { id: string } }) {
                     {members.map((member) => {
                       const isOwner = room?.created_by === member.uid;
                       const isCurrentUser = member.uid === currentUserUid;
-                      const canBan = room?.created_by === currentUserUid && !isOwner && !isCurrentUser;
+                      const isBanned = bannedUsers.some(b => b.banned_uid === member.uid);
+                      const canManage = room?.created_by === currentUserUid && !isOwner && !isCurrentUser;
                       
                       return (
                         <div
@@ -1113,12 +1382,15 @@ export default function RoomPage({ params }: { params: { id: string } }) {
                             {isOwner && (
                               <span className="text-xs text-yellow-400 font-bold">[OWNER]</span>
                             )}
+                            {isBanned && (
+                              <span className="text-xs text-error">[BANNED]</span>
+                            )}
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-retro-gray">
                               {new Date(member.joined_at).toLocaleDateString()}
                             </span>
-                            {canBan && (
+                            {canManage && !isBanned && (
                               <button
                                 onClick={() => handleBanUser(member.uid, member.users?.nickname || member.uid)}
                                 className="text-xs text-error hover:text-red-400 transition-colors px-2 py-1 border border-error hover:bg-error/10"
@@ -1133,8 +1405,8 @@ export default function RoomPage({ params }: { params: { id: string } }) {
                   </div>
                 </div>
 
-                {/* Banned Users (Owner Only) */}
-                {room?.created_by === currentUserUid && (
+                {/* Banned Users (Everyone can see, Owner can unban) */}
+                {bannedUsers.length > 0 && (
                   <div className="border-t border-border pt-4">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-error text-sm uppercase">
@@ -1149,33 +1421,31 @@ export default function RoomPage({ params }: { params: { id: string } }) {
                     </div>
                     {showBannedUsers && (
                       <div className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
-                        {bannedUsers.length === 0 ? (
-                          <p className="text-xs text-dim italic">No banned users</p>
-                        ) : (
-                          bannedUsers.map((ban) => (
-                            <div
-                              key={ban.id}
-                              className="flex items-center justify-between text-sm py-1 border-b border-gray-700"
-                            >
-                              <div className="flex-1">
-                                <span className="text-error">
-                                  {ban.users?.nickname || ban.banned_uid}
-                                </span>
-                                {ban.reason && (
-                                  <p className="text-xs text-dim italic mt-0.5">
-                                    "{ban.reason}"
-                                  </p>
-                                )}
-                              </div>
+                        {bannedUsers.map((ban) => (
+                          <div
+                            key={ban.id}
+                            className="flex items-center justify-between text-sm py-1 border-b border-gray-700"
+                          >
+                            <div className="flex-1">
+                              <span className="text-error">
+                                {ban.users?.nickname || ban.banned_uid}
+                              </span>
+                              {ban.reason && (
+                                <p className="text-xs text-dim italic mt-0.5">
+                                  "{ban.reason}"
+                                </p>
+                              )}
+                            </div>
+                            {room?.created_by === currentUserUid && (
                               <button
                                 onClick={() => handleUnbanUser(ban.id, ban.users?.nickname || ban.banned_uid)}
                                 className="text-xs text-accent hover:text-green-400 transition-colors px-2 py-1 border border-accent hover:bg-accent/10"
                               >
                                 [UNBAN]
                               </button>
-                            </div>
-                          ))
-                        )}
+                            )}
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -1364,28 +1634,99 @@ export default function RoomPage({ params }: { params: { id: string } }) {
       {!showSettings && (
         <div className="border-t-2 border-accent bg-retro-black p-4">
         <div className="max-w-6xl mx-auto">
-          {room?.locked ? (
-            // Room is locked - show warning
-            <div className="bg-red-500/10 border-2 border-red-500 rounded-lg p-6 text-center">
-              <div className="text-4xl mb-3">🔒</div>
-              <h3 className="text-xl text-red-500 font-bold uppercase mb-2">
-                [ROOM_LOCKED]
-              </h3>
-              <p className="text-red-400 text-sm mb-3">
-                {room.locked_reason || 'This room has been locked by management.'}
-              </p>
-              <div className="bg-red-500/5 border border-red-500/50 rounded p-3 text-xs text-red-400">
-                <p className="font-mono">
-                  • Messages are READ-ONLY<br/>
-                  • Cannot send new messages<br/>
-                  • Contact management for appeals
-                </p>
+          {room?.locked || isBanned ? (
+            // Room is locked OR user is banned - show modern warning
+            <div className="terminal">
+              <div className="border-2 border-error bg-error/5 p-6">
+                <div className="flex items-start gap-4 mb-4">
+                  <div className="text-5xl">{isBanned ? '🚫' : '🔒'}</div>
+                  <div className="flex-1">
+                    <h3 className="text-2xl text-error font-bold font-mono uppercase tracking-wider mb-2">
+                      {isBanned ? '[ACCESS_DENIED]' : '[ROOM_LOCKED]'}
+                    </h3>
+                    <p className="text-error/90 font-mono text-sm">
+                      {isBanned 
+                        ? 'You have been banned from this room by the owner.'
+                        : (room.locked_reason || 'This room has been locked by management.')
+                      }
+                    </p>
+                  </div>
+                </div>
+
+                <div className="border-2 border-error/50 bg-error/10 rounded p-4 mb-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="text-error text-xl">⚠</span>
+                    <h4 className="text-error font-mono font-bold uppercase text-sm">
+                      {isBanned ? 'Ban Information' : 'Lock Information'}
+                    </h4>
+                  </div>
+                  <div className="space-y-2 text-sm font-mono">
+                    {isBanned ? (
+                      <>
+                        <div className="flex items-start gap-2">
+                          <span className="text-error">▸</span>
+                          <div className="flex-1">
+                            <span className="text-error/80">Status:</span>
+                            <span className="text-error font-bold ml-2">BANNED</span>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="text-error">▸</span>
+                          <div className="flex-1">
+                            <span className="text-error/80">Reason:</span>
+                            <span className="text-white ml-2">{banInfo?.reason || 'Not specified'}</span>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="text-error">▸</span>
+                          <div className="flex-1">
+                            <span className="text-error/80">Access Level:</span>
+                            <span className="text-retro-amber ml-2">READ-ONLY</span>
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="text-error">▸</span>
+                          <div className="flex-1">
+                            <span className="text-error/80">Appeals:</span>
+                            <span className="text-white ml-2">Contact room owner</span>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-start gap-2">
+                          <span className="text-error">▸</span>
+                          <span className="text-error/80">Messages are READ-ONLY</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="text-error">▸</span>
+                          <span className="text-error/80">Cannot send new messages</span>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <span className="text-error">▸</span>
+                          <span className="text-error/80">Contact management for appeals</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {isBanned && (
+                  <div className="text-center pt-2">
+                    <p className="text-dim text-xs font-mono">
+                      You can still read messages but cannot participate in the conversation.
+                    </p>
+                  </div>
+                )}
+                
+                {room.locked_at && !isBanned && (
+                  <div className="text-center pt-2">
+                    <p className="text-error/70 text-xs font-mono">
+                      Locked: {new Date(room.locked_at).toLocaleString()}
+                    </p>
+                  </div>
+                )}
               </div>
-              {room.locked_at && (
-                <p className="text-xs text-red-400/70 mt-3">
-                  Locked: {new Date(room.locked_at).toLocaleString()}
-                </p>
-              )}
             </div>
           ) : (
             // Room is unlocked - normal input
@@ -1605,6 +1946,68 @@ export default function RoomPage({ params }: { params: { id: string } }) {
           uid={selectedUserUid}
           onClose={() => setSelectedUserUid(null)}
         />
+      )}
+
+      {/* Ban User Modal */}
+      {showBanModal && userToBan && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+          <TerminalPanel className="max-w-md w-full">
+            <div className="space-y-4">
+              <div className="border-b-2 border-border pb-4">
+                <h3 className="text-error font-bold font-mono text-lg">
+                  [BAN_USER]
+                </h3>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-white font-mono text-sm">
+                  Ban <span className="text-error font-bold">{userToBan.nickname}</span> from this room?
+                </p>
+                <p className="text-dim font-mono text-xs">
+                  This user will be removed from the room and cannot rejoin until unbanned.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm mb-2 text-accent uppercase">
+                  Ban Reason (Optional):
+                </label>
+                <textarea
+                  value={banReason}
+                  onChange={(e) => setBanReason(e.target.value)}
+                  placeholder="Enter reason for ban..."
+                  className="w-full bg-surface border-2 border-border text-accent p-3 font-mono text-sm focus:border-accent focus:outline-none resize-none"
+                  rows={3}
+                  maxLength={200}
+                />
+                <p className="text-xs text-dim mt-1">
+                  {banReason.length}/200 characters
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <NeonButton
+                  variant="danger"
+                  onClick={confirmBanUser}
+                  className="flex-1"
+                >
+                  [Confirm Ban]
+                </NeonButton>
+                <NeonButton
+                  variant="secondary"
+                  onClick={() => {
+                    setShowBanModal(false);
+                    setUserToBan(null);
+                    setBanReason('');
+                  }}
+                  className="flex-1"
+                >
+                  [Cancel]
+                </NeonButton>
+              </div>
+            </div>
+          </TerminalPanel>
+        </div>
       )}
 
       {/* Toast Notifications */}

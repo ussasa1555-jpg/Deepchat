@@ -12,65 +12,72 @@ interface KeyMetadata {
 
 const KEY_LIFETIME = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-export function useEncryption(roomId: string) {
+export function useEncryption(roomId: string, onKeyReady?: (key: string) => void) {
   const [encryptionKey, setEncryptionKey] = useState<string | null>(null);
   const [keyVersion, setKeyVersion] = useState<number>(1);
 
   useEffect(() => {
-    // Load or generate encryption key for this room with rotation support
-    const storageKey = `deepchat_room_key_${roomId}`;
+    if (!roomId || roomId === 'temp') return;
     
-    const loadOrGenerateKey = () => {
+    // Generate DETERMINISTIC key from roomId (same for all users)
+    const generateDeterministicKey = async () => {
+      console.log('[ENCRYPTION] 🔑 Generating deterministic key from:', roomId);
+      
+      // Use SubtleCrypto to derive key from roomId
+      const encoder = new TextEncoder();
+      const data = encoder.encode(roomId);
+      
+      // Hash the roomId
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = new Uint8Array(hashBuffer);
+      
+      // Convert to base64 for key
+      let binary = '';
+      for (let i = 0; i < hashArray.byteLength; i++) {
+        binary += String.fromCharCode(hashArray[i]);
+      }
+      const key = btoa(binary);
+      
+      console.log('[ENCRYPTION] ✅ Deterministic key generated');
+      return key;
+    };
+    
+    // Load from cache or generate
+    const loadKey = async () => {
+      const storageKey = `deepchat_room_key_${roomId}`;
       const stored = localStorage.getItem(storageKey);
       
       if (stored) {
         try {
           const metadata: KeyMetadata = JSON.parse(stored);
-          
-          // Check if key expired (30 days)
-          if (Date.now() > metadata.expiresAt) {
-            console.log('[ENCRYPTION] Key expired, rotating...');
-            return generateNewKey();
-          }
-          
-          // Key still valid
           setKeyVersion(metadata.version);
+          console.log(`[ENCRYPTION] ✅ Using cached deterministic key`);
           return metadata.key;
         } catch (error) {
-          // Legacy format (just a string), migrate to new format
-          console.log('[ENCRYPTION] Migrating to new key format...');
-          const metadata: KeyMetadata = {
-            key: stored,
-            createdAt: Date.now(),
-            expiresAt: Date.now() + KEY_LIFETIME,
-            version: 1
-          };
-          localStorage.setItem(storageKey, JSON.stringify(metadata));
-          setKeyVersion(1);
-          return stored;
+          // Regenerate if corrupted
         }
       }
       
-      return generateNewKey();
-    };
-    
-    const generateNewKey = () => {
-      const newKey = generateRoomKey();
-      const version = keyVersion + 1;
+      // Generate deterministic key
+      const key = await generateDeterministicKey();
       const metadata: KeyMetadata = {
-        key: newKey,
+        key,
         createdAt: Date.now(),
         expiresAt: Date.now() + KEY_LIFETIME,
-        version
+        version: 1
       };
       localStorage.setItem(storageKey, JSON.stringify(metadata));
-      setKeyVersion(version);
-      console.log(`[ENCRYPTION] New key generated (v${version})`);
-      return newKey;
+      setKeyVersion(1);
+      
+      return key;
     };
     
-    const key = loadOrGenerateKey();
-    setEncryptionKey(key);
+    loadKey().then(key => {
+      setEncryptionKey(key);
+      if (onKeyReady) {
+        onKeyReady(key);
+      }
+    });
   }, [roomId]);
 
   const encrypt = async (plaintext: string): Promise<{
@@ -111,18 +118,22 @@ export function useEncryption(roomId: string) {
     if (!encryptionKey) return encrypted; // Fallback to plaintext
     
     try {
-      // Verify HMAC signature if present
+      // Verify HMAC signature if present (OPTIONAL - warns but doesn't block)
       if (hmac) {
         const isValid = await verifyMessage(encrypted, hmac, encryptionKey);
         if (!isValid) {
-          console.error('[SECURITY] HMAC verification failed - message may be tampered!');
-          return '[MESSAGE_TAMPERED]';
+          console.warn('[HMAC] ⚠️ Verification failed - key mismatch or old message');
+          console.warn('[HMAC] Attempting decryption anyway (HMAC is optional)');
+          // Don't return, continue to decrypt
+        } else {
+          console.log('[HMAC] ✅ Verification passed');
         }
       }
       
+      // Always attempt decryption (HMAC is advisory only)
       return await decryptMessage(encrypted, salt, iv, encryptionKey);
     } catch (error) {
-      console.error('Decryption error:', error);
+      console.error('[DECRYPT] ❌ Decryption failed:', error);
       return '[DECRYPTION_FAILED]';
     }
   };

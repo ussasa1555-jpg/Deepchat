@@ -42,8 +42,8 @@ export async function checkRateLimit(
 export const RATE_LIMITS = {
   login: { limit: 5, window: 900 }, // 5 attempts per 15 min
   register: { limit: 3, window: 3600 }, // 3 per hour
-  message_send: { limit: 60, window: 60 }, // 60 per minute
-  private_room_key: { limit: 5, window: 3600 }, // 5 per hour
+  message_send: { limit: 100, window: 60 }, // 100 per minute (RELAXED!)
+  private_room_key: { limit: 50, window: 600 }, // 50 per 10 min (RELAXED!)
   oracle_query: { limit: 20, window: 3600 }, // 20 per hour
   dm_create: { limit: 10, window: 3600 }, // 10 per hour
   setup_profile: { limit: 10, window: 60 }, // 10 per minute

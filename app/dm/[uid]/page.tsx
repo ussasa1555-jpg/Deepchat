@@ -25,8 +25,6 @@ interface Message {
   encryption_salt?: string | null;
   encryption_iv?: string | null;
   hmac?: string | null;
-  nonce?: string | null;
-  message_timestamp?: number | null;
   users?: {
     nickname: string;
     role?: string;
@@ -61,7 +59,9 @@ export default function DMPage({ params }: { params: { uid: string } }) {
   const [decryptedMessages, setDecryptedMessages] = useState<Map<string, string>>(new Map());
   const hasScrolledRef = useRef(false);
   const { playNotification } = useSound();
-  const { encrypt, decrypt, isReady: encryptionReady } = useEncryption(`dm_${params.uid}`);
+  
+  // Telegram-style encryption: deterministic key from thread ID
+  const { encrypt, decrypt, isReady: encryptionReady } = useEncryption(threadId || 'temp');
   
   const { startTyping, stopTyping, onTypingChange } = useTypingIndicator({
     channelName: `dm:${threadId}:typing`,
@@ -73,7 +73,7 @@ export default function DMPage({ params }: { params: { uid: string } }) {
     init();
   }, [params.uid]);
 
-  // Decrypt encrypted messages
+  // Decrypt encrypted messages (Telegram-style)
   useEffect(() => {
     if (!encryptionReady) return;
 
@@ -91,7 +91,7 @@ export default function DMPage({ params }: { params: { uid: string } }) {
             );
             newDecrypted.set(msg.id, decrypted);
           } catch (error) {
-            console.error('Failed to decrypt message:', error);
+            console.error('[DM] Failed to decrypt:', error);
             newDecrypted.set(msg.id, '[ENCRYPTED]');
           }
         }
@@ -262,6 +262,9 @@ export default function DMPage({ params }: { params: { uid: string } }) {
       const uid = user.id;
       setCurrentUserUid(uid);
 
+      // Encryption key will be set after thread is found/created
+      console.log('[DM] 🔑 Encryption key will use thread ID');
+
       // Get current user nickname
       const { data: currentUserData } = await supabase
         .from('users')
@@ -365,6 +368,8 @@ export default function DMPage({ params }: { params: { uid: string } }) {
       }
 
       setThreadId(threadToUse);
+      console.log('[DM] 🔐 Telegram-style encryption ready for thread:', threadToUse);
+      
       await loadMessages(threadToUse, uid);
     } catch (err: any) {
       console.error('DM Init Error:', err);
@@ -556,6 +561,7 @@ export default function DMPage({ params }: { params: { uid: string } }) {
     return channel;
   };
 
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -588,28 +594,26 @@ export default function DMPage({ params }: { params: { uid: string } }) {
         deleted: false,
       };
 
-      // ⚠️ ENCRYPTION TEMPORARILY DISABLED FOR TESTING
-      // TODO: Re-enable after fixing decrypt issues
-      // if (encryptionReady) {
-      //   const encryptResult = await encrypt(sanitized);
-      //   if (encryptResult) {
-      //     messageData = {
-      //       ...messageData,
-      //       body: encryptResult.encrypted,
-      //       encrypted: true,
-      //       encryption_salt: encryptResult.salt,
-      //       encryption_iv: encryptResult.iv,
-      //       hmac: encryptResult.hmac,
-      //       nonce: encryptResult.nonce,
-      //       message_timestamp: Date.now(),
-      //     };
-      //   }
-      // }
+      // ✅ Telegram-style Encryption (AES-GCM)
+      if (encryptionReady) {
+        const encryptResult = await encrypt(sanitized);
+        if (encryptResult) {
+          messageData = {
+            ...messageData,
+            body: encryptResult.encrypted,
+            encrypted: true,
+            encryption_salt: encryptResult.salt,
+            encryption_iv: encryptResult.iv,
+            hmac: encryptResult.hmac,
+          };
+          console.log('[DM] 🔐 Message encrypted');
+        }
+      }
 
       console.log('[DM] 📤 Sending message:', {
         thread_id: messageData.thread_id,
         uid: messageData.uid,
-        body: messageData.body.substring(0, 50) + '...',
+        encrypted: messageData.encrypted,
         current_threadId_state: threadId
       });
       

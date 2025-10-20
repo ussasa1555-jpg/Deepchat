@@ -320,3 +320,4 @@ Script çalıştıktan sonra:
 
 
 
+

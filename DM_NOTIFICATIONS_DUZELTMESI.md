@@ -197,3 +197,4 @@ Artık arkadaşlarınızdan mesaj geldiğinde `/nodes` sayfasında **kırmızı 
 - **Migration**: `supabase/migrations/PRODUCTION/06_DM_NOTIFICATIONS_VIEW.sql`
 - **Frontend**: `app/nodes/page.tsx` (Lines 158-173, 588-609)
 
+
