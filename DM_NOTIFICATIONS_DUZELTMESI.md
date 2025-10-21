@@ -198,3 +198,5 @@ Artık arkadaşlarınızdan mesaj geldiğinde `/nodes` sayfasında **kırmızı 
 - **Frontend**: `app/nodes/page.tsx` (Lines 158-173, 588-609)
 
 
+
+

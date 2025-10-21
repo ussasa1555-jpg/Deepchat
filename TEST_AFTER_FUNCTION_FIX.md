@@ -321,3 +321,5 @@ Script çalıştıktan sonra:
 
 
 
+
+

@@ -159,3 +159,5 @@ AND table_name IN ('audit_logs', 'threat_detections');
 Artık `/api/log-action` endpoint'i çalışacak!
 
 
+
+

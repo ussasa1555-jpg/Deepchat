@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
 export async function POST(req: NextRequest) {
+  const startTime = Date.now();
+  
   try {
     // Auth check
     const supabase = createClient();
@@ -9,6 +11,47 @@ export async function POST(req: NextRequest) {
     
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const uid = session.user.id;
+
+    // Check daily usage limit (10 minutes = 600 seconds)
+    const { data: usageData, error: usageError } = await supabase.rpc('get_oracle_remaining_time', {
+      target_uid: uid
+    });
+
+    if (usageError) {
+      console.error('[ORACLE] ❌ Usage check error:', usageError);
+    }
+
+    if (usageData && usageData.limit_reached) {
+      const usedMinutes = Math.floor(usageData.used_seconds / 60);
+      const usedSeconds = usageData.used_seconds % 60;
+      
+      return NextResponse.json({
+        error: 'DAILY_LIMIT_REACHED',
+        fallback: `[ERROR_429] DAILY_LIMIT_EXCEEDED
+
+╔════════════════════════════════════╗
+║ ORACLE ACCESS RESTRICTED           ║
+║ DAILY QUOTA: 10 MINUTES            ║
+║ USED TODAY: ${usedMinutes}m ${usedSeconds}s               ║
+║ STATUS: LIMIT_REACHED              ║
+╚════════════════════════════════════╝
+
+Your daily Oracle AI usage limit has been reached.
+
+QUOTA DETAILS:
+• Daily Limit: 10 minutes
+• Used Today: ${usedMinutes} minutes ${usedSeconds} seconds
+• Remaining: 0 seconds
+• Queries: ${usageData.query_count}
+
+The quota resets at midnight (00:00).
+Please try again tomorrow.
+
+[END_TRANSMISSION]`
+      }, { status: 429 });
     }
 
     const { message } = await req.json();
@@ -132,10 +175,32 @@ YASAKLAR:
     console.log('[ORACLE] Model used:', data.model);
     console.log('[ORACLE] Tokens used:', data.usage?.total_tokens);
 
+    // Record usage time (in seconds)
+    const endTime = Date.now();
+    const usedSeconds = Math.ceil((endTime - startTime) / 1000);
+    
+    const { data: recordData, error: recordError } = await supabase.rpc('record_oracle_usage', {
+      target_uid: uid,
+      seconds_used: usedSeconds
+    });
+
+    if (recordError) {
+      console.error('[ORACLE] ❌ Usage recording error:', recordError);
+    } else {
+      console.log('[ORACLE] 📊 Usage recorded:', usedSeconds, 'seconds');
+      console.log('[ORACLE] 📊 Total today:', recordData?.total_seconds, 'seconds');
+      console.log('[ORACLE] 📊 Remaining:', recordData?.remaining_seconds, 'seconds');
+    }
+
     return NextResponse.json({
       reply,
       usage: data.usage,
       model: data.model,
+      quota: recordData ? {
+        used_seconds: recordData.total_seconds,
+        remaining_seconds: recordData.remaining_seconds,
+        limit_reached: recordData.limit_reached
+      } : undefined
     });
 
   } catch (error: any) {

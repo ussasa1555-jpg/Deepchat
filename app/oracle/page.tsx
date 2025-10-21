@@ -12,10 +12,17 @@ interface Message {
   timestamp: Date;
 }
 
+interface QuotaInfo {
+  used_seconds: number;
+  remaining_seconds: number;
+  limit_reached: boolean;
+}
+
 export default function OraclePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [quota, setQuota] = useState<QuotaInfo | null>(null);
   
   // Fix: Client-only state to prevent hydration mismatch
   const [sessionId, setSessionId] = useState<string>('');
@@ -88,6 +95,11 @@ export default function OraclePage() {
       };
 
       setMessages((prev) => [...prev, aiMessage]);
+      
+      // Update quota info
+      if (data.quota) {
+        setQuota(data.quota);
+      }
     } catch (err: any) {
       console.error('[ORACLE] Error:', err);
       const errorMessage: Message = {
@@ -225,25 +237,35 @@ SETUP:
       {/* Input */}
       <div className="border-t-2 border-accent bg-retro-black p-4">
         <div className="max-w-4xl mx-auto">
+          {/* Quota Warning */}
+          {quota && quota.remaining_seconds < 120 && (
+            <div className="mb-3 p-2 border-2 border-retro-amber bg-retro-amber/10">
+              <p className="text-retro-amber text-xs font-mono">
+                ⚠️ LOW QUOTA: {Math.floor(quota.remaining_seconds / 60)}m {quota.remaining_seconds % 60}s remaining today
+              </p>
+            </div>
+          )}
+          
           <form onSubmit={handleSend} className="flex gap-2">
             <div className="flex-1">
               <CLIInput
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Enter query... (20 queries per hour)"
-                disabled={loading}
+                placeholder={
+                  quota 
+                    ? `${Math.floor(quota.remaining_seconds / 60)}m ${quota.remaining_seconds % 60}s remaining today...`
+                    : "Enter query... (10 min daily limit)"
+                }
+                disabled={loading || (quota?.limit_reached ?? false)}
                 maxLength={500}
                 showCursor
               />
             </div>
-            <NeonButton type="submit" disabled={loading || !input.trim()}>
+            <NeonButton type="submit" disabled={loading || !input.trim() || (quota?.limit_reached ?? false)}>
               {loading ? '[...]' : '[QUERY]'}
             </NeonButton>
           </form>
-          <p className="text-xs text-retro-gray mt-2">
-            Powered by Groq AI (Llama 3.3 70B) • Bold, witty, no BS 🚀
-          </p>
         </div>
       </div>
     </div>

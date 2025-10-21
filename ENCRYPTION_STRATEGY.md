@@ -178,3 +178,5 @@ CREATE TABLE dm_key_exchange (
 ✅ **HMAC:** Message authentication enabled  
 ✅ **Security:** Production-ready 🔒
 
+
+

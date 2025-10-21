@@ -73,8 +73,8 @@ export function UserDetailModal({ uid, onClose }: UserDetailModalProps) {
 
   if (loading) {
     return (
-      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-        <div className="terminal max-w-4xl w-full p-6">
+      <div className="fixed inset-0 bg-black/95 backdrop-blur-sm flex items-center justify-center z-50">
+        <div className="terminal w-full max-w-md p-6">
           <p className="text-accent text-center">Loading user details...</p>
         </div>
       </div>
@@ -83,8 +83,8 @@ export function UserDetailModal({ uid, onClose }: UserDetailModalProps) {
 
   if (!details) {
     return (
-      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-        <div className="terminal max-w-4xl w-full p-6">
+      <div className="fixed inset-0 bg-black/95 backdrop-blur-sm flex items-center justify-center z-50">
+        <div className="terminal w-full max-w-md p-6">
           <p className="text-red-500 text-center">Failed to load user details</p>
           <div className="text-center mt-4">
             <NeonButton onClick={onClose}>Close</NeonButton>
@@ -97,8 +97,8 @@ export function UserDetailModal({ uid, onClose }: UserDetailModalProps) {
   const { user, stats, ip_history, recent_activity, threat_score } = details;
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
-      <div className="terminal max-w-6xl w-full my-8">
+    <div className="fixed inset-0 bg-black/95 backdrop-blur-sm z-50 overflow-hidden">
+      <div className="terminal w-full h-full overflow-y-auto">
         {/* Header */}
         <div className="border-b-2 border-border pb-4 mb-4">
           <div className="flex items-center justify-between">
@@ -372,6 +372,7 @@ export function UserDetailModal({ uid, onClose }: UserDetailModalProps) {
     </div>
   );
 }
+
 
 
 
