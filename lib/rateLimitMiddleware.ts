@@ -23,7 +23,8 @@ export function withRateLimit(
   handlerOrUndefined?: () => Promise<NextResponse>
 ): any {
   // API Style 1: withRateLimit(request, type, identifier, handler)
-  if (identifierOrUndefined !== undefined && handlerOrUndefined !== undefined) {
+  // Check if first argument is NOT a function (it's a Request object)
+  if (typeof requestOrHandler !== 'function' && identifierOrUndefined !== undefined && handlerOrUndefined !== undefined) {
     const request = requestOrHandler as NextRequest;
     const type = typeOrType;
     const identifier = identifierOrUndefined;
@@ -67,6 +68,7 @@ export function withRateLimit(
   }
 
   // API Style 2: withRateLimit(handler, type)
+  // First argument is a function (handler)
   const handler = requestOrHandler as (request: Request) => Promise<NextResponse>;
   const type = typeOrType;
 
