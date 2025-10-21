@@ -323,3 +323,4 @@ Script çalıştıktan sonra:
 
 
 
+

@@ -6,14 +6,28 @@ import { logAdminAction } from '@/lib/adminActionLogger';
 import { getClientIp } from '@/lib/sessionSecurity';
 import { withRateLimit } from '@/lib/rateLimitMiddleware';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+function getSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  
+  if (!supabaseUrl || !supabaseServiceKey) {
+    throw new Error('Missing Supabase credentials');
+  }
+  
+  return createClient(supabaseUrl, supabaseServiceKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  });
+}
 
 async function handler(request: Request) {
   const startTime = Date.now();
 
   try {
+    const supabaseAdmin = getSupabaseAdmin();
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     // Get session
     const authHeader = request.headers.get('authorization');
     if (!authHeader) {
@@ -173,6 +187,7 @@ async function handler(request: Request) {
 }
 
 export const POST = withRateLimit(handler, 'admin_ban_user');
+
 
 
 
