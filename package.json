@@ -59,6 +59,9 @@
     "node": ">=20.0.0",
     "npm": ">=10.0.0"
   },
+  "resolutions": {
+    "micromatch": "4.0.7"
+  },
   "overrides": {
     "rimraf": "^5.0.5",
     "glob": "^10.3.10"
