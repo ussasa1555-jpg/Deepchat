@@ -24,9 +24,9 @@ const nextConfig = {
     ignoreBuildErrors: true, // Temporarily for deployment
   },
 
-  // ESLint (balanced approach)
+  // ESLint (build optimization)
   eslint: {
-    ignoreDuringBuilds: true, // Temporarily for deployment
+    ignoreDuringBuilds: true, // Prevent micromatch loops
   },
 
   // Image optimization
