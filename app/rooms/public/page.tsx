@@ -106,6 +106,7 @@ export default function PublicRoomsPage() {
         .from('rooms')
         .select('*')
         .eq('type', 'public')
+        .neq('id', '00000000-0000-0000-0000-000000000001') // Hide admin chat room
         .order('created_at', { ascending: false });
 
       if (error) throw error;
