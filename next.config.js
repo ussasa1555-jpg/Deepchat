@@ -26,7 +26,7 @@ const nextConfig = {
 
   // ESLint (build optimization)
   eslint: {
-    ignoreDuringBuilds: true, // Prevent micromatch loops
+    ignoreDuringBuilds: true,
   },
 
   // Image optimization
