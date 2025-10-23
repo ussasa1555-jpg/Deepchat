@@ -10,24 +10,40 @@ const cspHeader = `
   frame-ancestors 'none';
   base-uri 'self';
   form-action 'self';
+  upgrade-insecure-requests;
 `;
 
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
+  compress: true,
+  poweredByHeader: false,
 
-  // TypeScript hatalarını ignore et (deployment için)
+  // TypeScript (balanced approach)
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: true, // Temporarily for deployment
   },
 
-  // ESLint hatalarını ignore et (deployment için)
+  // ESLint (balanced approach)
   eslint: {
-    ignoreDuringBuilds: true,
+    ignoreDuringBuilds: true, // Temporarily for deployment
   },
 
-  // Webpack config for Signal Protocol (browser compatibility)
-  webpack: (config, { isServer }) => {
+  // Image optimization
+  images: {
+    formats: ['image/webp', 'image/avif'],
+    minimumCacheTTL: 60,
+    deviceSizes: [640, 750, 828, 1080, 1200, 1920, 2048, 3840],
+    imageSizes: [16, 32, 48, 64, 96, 128, 256, 384],
+  },
+
+  // Experimental features
+  experimental: {
+    optimizePackageImports: ['framer-motion', 'zod', 'react-hook-form'],
+  },
+
+  // Webpack config optimizations
+  webpack: (config, { isServer, dev }) => {
     if (!isServer) {
       // Browser-side: ignore Node.js modules
       config.resolve.fallback = {
@@ -38,6 +54,27 @@ const nextConfig = {
         crypto: false,
       };
     }
+
+    // Bundle analyzer (dev only)
+    if (process.env.ANALYZE === 'true') {
+      const { BundleAnalyzerPlugin } = require('webpack-bundle-analyzer');
+      config.plugins.push(
+        new BundleAnalyzerPlugin({
+          analyzerMode: 'static',
+          openAnalyzer: false,
+          reportFilename: 'bundle-report.html',
+        })
+      );
+    }
+
+    // Tree shaking optimizations
+    if (!isServer && !dev) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        'lodash': 'lodash-es',
+      };
+    }
+
     return config;
   },
 
