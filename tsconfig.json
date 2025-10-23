@@ -38,10 +38,13 @@
   "include": [
     "next-env.d.ts",
     ".next/types/**/*.ts",
-    "app/**/*",
-    "lib/**/*",
-    "components/**/*",
-    "types/**/*"
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "lib/**/*.ts",
+    "lib/**/*.tsx",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
