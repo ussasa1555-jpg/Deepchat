@@ -34,7 +34,7 @@ const nextConfig = {
   },
 
   experimental: {
-    optimizePackageImports: ['framer-motion', 'zod', 'react-hook-form'],
+    // optimizePackageImports: ['framer-motion', 'zod', 'react-hook-form'], // Geçici olarak kapatıldı
   },
 
   webpack: (config, { isServer, dev }) => {
@@ -59,7 +59,7 @@ const nextConfig = {
       );
     }
 
-    if (!isServer && !dev) {
+    if (!isServer && dev) {
       config.resolve.alias = {
         ...config.resolve.alias,
         lodash: 'lodash-es',
@@ -72,7 +72,7 @@ const nextConfig = {
   async headers() {
     return [
       {
-        source: '/(.*)',
+        source: '/:path*',
         headers: [
           {
             key: 'Content-Security-Policy',
